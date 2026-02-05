@@ -1,0 +1,53 @@
+name: Manual Production Deploy (MASTER)
+
+on:
+  workflow_dispatch:
+    inputs:
+      approveProd:
+        description: "Type YES to deploy to production"
+        required: true
+        default: "NO"
+      imageTag:
+        description: "Enter image tag (example: master-42)"
+        required: true
+
+env:
+  DOCKER_HOST: tcp://gitea-docker:2375
+  DOCKER_TLS_CERTDIR: ""
+  AWS_REGION: ${{ secrets.AWS_REGION }}
+  AWS_ACCOUNT_ID: ${{ secrets.AWS_ACCOUNT_ID }}
+  ECR_REPOSITORY: hrms-fe
+  EC2_USER: ec2-user
+  EC2_HOST: ${{ secrets.EC2_HOST }}
+
+jobs:
+  deploy-master:
+    runs-on: ubuntu-latest
+    if: github.event.inputs.approveProd == 'YES' && github.ref_name == 'master'
+
+    steps:
+      - name: Setup SSH key
+        run: |
+          mkdir -p ~/.ssh
+          echo "${{ secrets.EC2_SSH_KEY }}" > ~/.ssh/key.pem
+          chmod 400 ~/.ssh/key.pem
+
+      - name: Trust host
+        run: ssh-keyscan -H $EC2_HOST >> ~/.ssh/known_hosts
+
+      - name: Deploy Production
+        run: |
+          ssh -i ~/.ssh/key.pem $EC2_USER@$EC2_HOST bash <<'EOF'
+            set -e
+            cd /home/ec2-user/hrms
+
+            IMAGE_TAG="${{ github.event.inputs.imageTag }}"
+
+            echo "Updating tag to: $IMAGE_TAG"
+
+            sed -i -E "s|^[[:space:]]*tag:.*|  tag: ${IMAGE_TAG}|" frontend-prod-values.yaml
+
+            helm upgrade --install hrms-prod-fe \
+              -f frontend-prod-values.yaml \
+              -n hrms .
+          EOF
