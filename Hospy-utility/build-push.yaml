@@ -1,0 +1,63 @@
+name: Build, Push Docker Image & Deploy to EC2
+
+on:
+  push:
+    branches:
+      - dev
+
+env:
+  DOCKER_HOST: tcp://gitea-docker:2375
+  DOCKER_TLS_CERTDIR: ""
+
+jobs:
+  build-push-deploy:
+    runs-on: ubuntu-latest
+
+    steps:
+      # ---------------- Checkout opprescription ----------------
+      - name: Checkout opprescription repo
+        uses: actions/checkout@v4
+
+      # ---------------- Checkout utility ----------------
+      - name: Checkout utility repo
+        uses: actions/checkout@v4
+        with:
+          repository: datasirpi/Hospy-utility
+          ref: dev
+          path: utility
+          token: ${{ secrets.DSGITHUB_TOKEN }}
+
+      # ---------------- Debug Utility Folder ----------------
+      - name: Debug Utility Folder
+        run: ls -R utility
+
+      # ---------------- Setup Java ----------------
+      - name: Setup Java 21
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: 21
+          cache: gradle
+
+      # ---------------- Make gradlew executable ----------------
+      - name: Make gradlew executable
+        working-directory: utility/utility
+        run: chmod +x gradlew
+
+      # ---------------- Build utility ----------------
+      - name: Build utility JAR
+        working-directory: utility/utility
+        run: ./gradlew clean build --no-daemon
+
+      # ---------------- Publish utility to Nexus ----------------
+      - name: Publish utility to Nexus
+        working-directory: utility/utility
+        env:
+          NEXUS_USERNAME: ${{ secrets.NEXUS_USER }}
+          NEXUS_PASSWORD: ${{ secrets.NEXUS_PASSWORD }}
+        run: |
+          ./gradlew publish \
+            -PnexusUser=$NEXUS_USERNAME \
+            -PnexusPassword=$NEXUS_PASSWORD \
+            --no-daemon \
+            --no-configuration-cache
