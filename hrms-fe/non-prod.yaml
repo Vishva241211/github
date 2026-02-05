@@ -1,0 +1,41 @@
+name: Build & Deploy HRMS Frontend
+
+on:
+  push:
+    branches:
+      - dev
+      - master
+
+env:
+  AWS_REGION: ${{ secrets.AWS_REGION }}
+  ECR_REGISTRY: ${{ secrets.AWS_ACCOUNT_ID }}.dkr.ecr.${{ secrets.AWS_REGION }}.amazonaws.com
+  ECR_REPOSITORY: hrms-fe
+  NAMESPACE: hrms
+
+jobs:
+  build-push-deploy:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout Code
+        uses: actions/checkout@v4
+
+      - name: Set Image Tag
+        run: |
+          # Replaces / with - and creates a unique tag
+          CLEAN_BRANCH=$(echo "${{ github.ref_name }}" | tr '/' '-')
+          echo "IMAGE_TAG=${CLEAN_BRANCH}-${{ github.run_number }}" >> $GITHUB_ENV
+
+      - name: Configure AWS Credentials
+        uses: https://github.com/aws-actions/configure-aws-credentials@v4
+        with:
+          aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          aws-region: ${{ secrets.AWS_REGION }}
+
+      - name: Login to Amazon ECR
+        id: login-ecr
+        uses: https://github.com/aws-actions/amazon-ecr-login@v2
+      - name: Build and Push to ECR
+        run: |
+          docker build -t ${{ env.ECR_REGISTRY }}/${{ env.ECR_REPOSITORY }}:${{ env.IMAGE_TAG }} .
+          docker push ${{ env.ECR_REGISTRY }}/${{ env.ECR_REPOSITORY }}:${{ env.IMAGE_TAG }}
