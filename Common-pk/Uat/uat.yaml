@@ -1,0 +1,39 @@
+name: Manual uat Deploy via ArgoCD
+
+on:
+  workflow_dispatch:
+    inputs:
+      approveuat:
+        description: "Type YES to deploy to uat"
+        required: true
+        default: "NO"
+      imageTag:
+        description: "Enter uat image tag (example: uat-12)"
+        required: true
+
+env:
+  VALUES_FILE: yap/services/common-pk-service/values-uat.yaml
+
+jobs:
+  deploy-prod:
+    runs-on: ubuntu-latest
+    if: github.event.inputs.approveuat == 'YES' && github.ref_name == 'uat'
+
+    steps:
+      - name: GitOps Commit to Trigger ArgoCD
+        run: |
+          git config --global user.email "sambath.r@datasirpi.com"
+          git config --global user.name "sam-r17"
+
+          git clone https://x-access-token:${{ secrets.GIT_TOKEN }}@gitea.yap.com/yapdigital/yap-helm.git
+          cd yap-helm
+
+          IMAGE_TAG="${{ github.event.inputs.imageTag }}"
+          echo "Deploying UAT with image: $IMAGE_TAG"
+
+          sed -i "s/tag: .*/tag: ${IMAGE_TAG}/" ${VALUES_FILE}
+
+          git add ${VALUES_FILE}
+          git commit -m "Deploy common-pk-service ${IMAGE_TAG} to UAT via CI"
+          git push origin main
+ 
