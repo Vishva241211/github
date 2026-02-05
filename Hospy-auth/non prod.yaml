@@ -1,0 +1,74 @@
+name: Build & Deploy (Non-Master)
+
+on:
+  push:
+    branches:
+      - dev
+      - master
+env:
+  DOCKER_HOST: tcp://gitea-docker:2375
+  DOCKER_TLS_CERTDIR: ""
+  AWS_REGION: ${{ secrets.AWS_REGION }}
+  AWS_ACCOUNT_ID: ${{ secrets.AWS_ACCOUNT_ID }}
+  ECR_REPOSITORY: hospy-auth
+  EC2_USER: ec2-user
+  EC2_HOST: ${{ secrets.EC2_HOST }}
+
+jobs:
+  build-push:
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Docker Info
+        run: docker info
+
+      - name: Login to Amazon ECR
+        run: |
+          docker run --rm \
+            -e AWS_ACCESS_KEY_ID=${{ secrets.AWS_ACCESS_KEY_ID }} \
+            -e AWS_SECRET_ACCESS_KEY=${{ secrets.AWS_SECRET_ACCESS_KEY }} \
+            -e AWS_REGION=$AWS_REGION \
+            amazon/aws-cli \
+            ecr get-login-password --region $AWS_REGION \
+          | docker login \
+            --username AWS \
+            --password-stdin $AWS_ACCOUNT_ID.dkr.ecr.$AWS_REGION.amazonaws.com
+
+      - name: Set image tag
+        run: |
+          BRANCH_NAME=$(echo "$GITHUB_REF_NAME" | tr '/' '-')
+          IMAGE_TAG="${BRANCH_NAME}-${GITHUB_RUN_NUMBER}"
+          echo "IMAGE_TAG=$IMAGE_TAG" >> $GITHUB_ENV
+          echo "Using IMAGE_TAG=$IMAGE_TAG"
+
+      - name: Build Docker Image
+        working-directory: auth
+        run: |
+          docker build \
+            -t $AWS_ACCOUNT_ID.dkr.ecr.$AWS_REGION.amazonaws.com/$ECR_REPOSITORY:$IMAGE_TAG \
+            -f Dockerfile .
+
+      - name: Push
+        run: docker push $AWS_ACCOUNT_ID.dkr.ecr.$AWS_REGION.amazonaws.com/$ECR_REPOSITORY:$IMAGE_TAG
+
+      - name: Setup SSH key
+        if: github.ref_name != 'master'
+        run: |
+          mkdir -p ~/.ssh
+          echo "${{ secrets.EC2_SSH_KEY }}" > ~/.ssh/key.pem
+          chmod 400 ~/.ssh/key.pem
+
+      - name: Trust Host
+        if: github.ref_name != 'master'
+        run: ssh-keyscan -H $EC2_HOST >> ~/.ssh/known_hosts
+
+      - name: Update Helm & Deploy
+        if: github.ref_name != 'master'
+        run: |
+          ssh -i ~/.ssh/key.pem $EC2_USER@$EC2_HOST "
+          sed -i 's/tag: .*/tag: ${IMAGE_TAG}/' /home/ec2-user/hospy-chart/hospy-dev/auth-values.yaml &&
+          cd /home/ec2-user/hospy-chart/hospy-dev &&
+          helm upgrade --install hospy-auth -f auth-values.yaml -n hospy-dev .
+          "
