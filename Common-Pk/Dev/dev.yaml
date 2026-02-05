@@ -1,0 +1,54 @@
+name: Build & Publish to Nexus
+
+on:
+  push:
+    branches: [dev, uat]
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+
+    env:
+      NEXUS_URL: nexus.yap.com
+      NEXUS_REPOSITORY: yap-common
+
+    steps:
+      - name: Checkout source
+        uses: actions/checkout@v4
+
+      - name: Setup Java 17
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: 17
+
+      - name: Install Maven (required for act)
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y maven
+          mvn -version
+
+      - name: Configure Maven settings.xml
+        run: |
+          mkdir -p ~/.m2
+          cat <<EOF > ~/.m2/settings.xml
+          <settings>
+            <servers>
+              <server>
+                <id>${NEXUS_REPOSITORY}</id>
+                <username>${{ secrets.NEXUS_USER }}</username>
+                <password>${{ secrets.NEXUS_PASSWORD }}</password>
+              </server>
+            </servers>
+          </settings>
+          EOF
+
+      - name: Build (Jenkins equivalent)
+        run: |
+          mvn clean install -U -DskipTests -Dfindbugs.skip=true
+          mvn clean verify -DskipTests -Dfindbugs.skip=true
+
+      - name: Publish to Nexus
+        run: |
+          mvn deploy -DskipTests \
+            -DaltDeploymentRepository=${NEXUS_REPOSITORY}::default::https://${NEXUS_URL}/repository/${NEXUS_REPOSITORY}/
