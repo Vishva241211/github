@@ -1,0 +1,87 @@
+name: Build, Push Docker Image & Deploy to EC2
+
+on:
+  push:
+    branches:
+      - dev
+
+env:
+  DOCKER_HOST: tcp://gitea-docker:2375
+  DOCKER_TLS_CERTDIR: ""
+  AWS_REGION: ${{ secrets.AWS_REGION }}
+  AWS_ACCOUNT_ID: ${{ secrets.AWS_ACCOUNT_ID }}
+  ECR_REPOSITORY: hospy-frontend
+  HELM_RELEASE_NAME: hospy-frontend
+  EC2_USER: ec2-user
+  EC2_HOST: ${{ secrets.EC2_HOST }}
+
+jobs:
+  build-push-deploy:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Configure AWS credentials
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          aws-region: ${{ secrets.AWS_REGION }}
+
+      # ✅ FIXED ECR LOGIN (works with act / Gitea / GitHub)
+      - name: Login to Amazon ECR
+        shell: bash
+        run: |
+          ECR_PASSWORD=$(docker run --rm \
+            -e AWS_ACCESS_KEY_ID=${{ secrets.AWS_ACCESS_KEY_ID }} \
+            -e AWS_SECRET_ACCESS_KEY=${{ secrets.AWS_SECRET_ACCESS_KEY }} \
+            -e AWS_REGION=$AWS_REGION \
+            amazon/aws-cli:2.15.0 \
+            ecr get-login-password --region $AWS_REGION)
+
+          echo "$ECR_PASSWORD" | docker login \
+            --username AWS \
+            --password-stdin \
+            $AWS_ACCOUNT_ID.dkr.ecr.$AWS_REGION.amazonaws.com
+
+      - name: Set image tag
+        run: |
+          IMAGE_TAG="${GITHUB_REF_NAME}-${GITHUB_RUN_NUMBER}"
+          echo "IMAGE_TAG=$IMAGE_TAG" >> $GITHUB_ENV
+          echo "Using IMAGE_TAG=$IMAGE_TAG"
+
+      - name: Setup Docker Buildx
+        run: |
+          docker buildx create --use --name builder || docker buildx use builder
+
+      - name: Build & Push Docker image
+        run: |
+          docker buildx build \
+            --platform linux/amd64 \
+            -t $AWS_ACCOUNT_ID.dkr.ecr.$AWS_REGION.amazonaws.com/$ECR_REPOSITORY:$IMAGE_TAG \
+            --push .
+
+      - name: Setup SSH key
+        run: |
+          mkdir -p ~/.ssh
+          echo "${{ secrets.EC2_SSH_KEY }}" > ~/.ssh/bastion.pem
+          chmod 400 ~/.ssh/bastion.pem
+
+      - name: Add EC2 host to known_hosts
+        run: |
+          ssh-keyscan -H $EC2_HOST >> ~/.ssh/known_hosts
+
+      - name: Update Helm values with new image tag
+        run: |
+          ssh -i ~/.ssh/bastion.pem $EC2_USER@$EC2_HOST \
+          "sed -i 's/tag:.*/tag: ${IMAGE_TAG}/' \
+          /home/ec2-user/hospy-chart/hospy-dev/frontend_values.yaml"
+
+      - name: Deploy with Helm
+        run: |
+          ssh -i ~/.ssh/bastion.pem $EC2_USER@$EC2_HOST \
+          "cd /home/ec2-user/hospy-chart/hospy-dev && \
+           helm upgrade --install $HELM_RELEASE_NAME \
+           -f frontend_values.yaml -n hospy-dev ."
