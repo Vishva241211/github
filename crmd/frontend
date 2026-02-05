@@ -1,0 +1,61 @@
+name: Frontend Manual Build
+
+on:
+  workflow_dispatch:
+    inputs:
+      environment:
+        description: "Environment to deploy"
+        required: true
+        default: "dev"
+        type: choice
+        options:
+          - dev
+          - master
+          - prod
+
+env:
+  AWS_REGION: ${{ secrets.AWS_REGION }}
+  AWS_ACCOUNT_ID: ${{ secrets.AWS_ACCOUNT_ID }}
+  ECR_REPOSITORY: crmd-fe
+  HELM_RELEASE_NAME: crmd-fe
+  EC2_USER: ec2-user
+  EC2_HOST: ${{ secrets.EC2_HOST }}
+
+jobs:
+  build-push-deploy:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Docker info
+        run: docker info
+
+      - name: Set Image Tag
+        run: |
+          # Replaces / with - and creates a unique tag
+          CLEAN_BRANCH=$(echo "${{ github.ref_name }}" | tr '/' '-')
+          echo "IMAGE_TAG=${CLEAN_BRANCH}-${{ github.run_number }}" >> $GITHUB_ENV
+
+      - name: Configure AWS Credentials
+        uses: https://github.com/aws-actions/configure-aws-credentials@v4
+        with:
+          aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          aws-region: ${{ secrets.AWS_REGION }}
+
+      - name: Login to Amazon ECR
+        id: login-ecr
+        uses: https://github.com/aws-actions/amazon-ecr-login@v2
+
+      - name: Build Docker Image
+        working-directory: frontend
+        run: |
+          docker build \
+            -t $AWS_ACCOUNT_ID.dkr.ecr.$AWS_REGION.amazonaws.com/$ECR_REPOSITORY:$IMAGE_TAG \
+            -f Dockerfile .
+
+      - name: Push Docker image
+        run: |
+          docker push $AWS_ACCOUNT_ID.dkr.ecr.$AWS_REGION.amazonaws.com/$ECR_REPOSITORY:$IMAGE_TAG
